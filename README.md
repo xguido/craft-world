@@ -186,7 +186,7 @@ Gunakan untuk `CLAIM_AREA`
 ## ▶️ Menjalankan Bot
 
 ```bash
-python bot.py
+python craftworld.py
 ```
 
 - Bot akan memulai dari `START_MINE`, lalu lanjut ke `START_FACTORY`, `CLAIM_AREA`, dan `UPGRADE` jika diaktifkan.
