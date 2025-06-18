@@ -60,7 +60,7 @@ Jika Anda menggunakan lebih dari 1 akun:
 ## ▶️ Menjalankan Bot
 
 ```bash
-python craftworldv3_fixed.py
+python craftworld.py
 ```
 
 Bot akan otomatis menjalankan semua proses dan menyinkronkan data akun.
