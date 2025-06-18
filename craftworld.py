@@ -2,9 +2,10 @@ import json
 import uuid
 import requests
 import time
+import random
+import threading
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 console = Console()
 
@@ -35,16 +36,7 @@ account_tokens = {}
 def fetch_token(api_key, refresh_token):
     url = f"https://securetoken.googleapis.com/v1/token?key={api_key}"
     headers = {
-        "accept": "*/*",
-        "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
-        "content-type": "application/x-www-form-urlencoded",
-        "origin": "https://preview.craft-world.gg",
-        "priority": "u=1, i",
-        "referer": "https://preview.craft-world.gg/",
-        "sec-ch-ua": "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
-        "sec-fetch-dest": "empty"
+        "content-type": "application/x-www-form-urlencoded"
     }
     data = {
         "grant_type": "refresh_token",
@@ -124,15 +116,12 @@ def fetch_graphql_data(token):
         return None
 
 def extract_and_update_config(graphql_data, config, idx):
-    print(graphql_data);
     acc = graphql_data.get("data", {}).get("account", {})
     if not acc:
         Logger.error(f"Tidak ada data akun ke-{idx+1} di response.")
         return config
 
-    # Ambil semua mine_id (bisa lebih dari satu di masa depan)
     mine_ids = [m["id"] for m in acc.get("mines", []) if m.get("id")]
-    # Ambil semua factory_id dari seluruh area di seluruh land plot
     factory_ids = []
     area_ids = []
     for land_plot in acc.get("landPlots", []):
@@ -171,95 +160,72 @@ def start_factory(token, factory_id):
     Logger.action(f"START_FACTORY (ID: {factory_id})...")
     return post_action(token, "START_FACTORY", {"factoryId": factory_id})
 
-def handle_claim_area(token, area_id, account, index):
+def handle_claim_area(token, area_id):
     Logger.action(f"CLAIM_AREA (ID: {area_id})...")
     amount = 9999
     new_account = post_action(token, "CLAIM_AREA", {"areaId": area_id, "amountToClaim": amount})
     if new_account:
         Logger.info(f"CLAIM_AREA berhasil!")
-        return new_account
     else:
         Logger.warn(f"CLAIM_AREA gagal.")
-        return account
 
+def run_account_loop(idx, api_key, refresh_token, config):
+    while True:
+        Logger.step(f"⏳ Mulai sync akun ke-{idx+1}...")
+        token = get_account_token(idx, api_key, refresh_token)
+        if not token:
+            Logger.error(f"Token akun ke-{idx+1} gagal.")
+            time.sleep(10)
+            continue
 
-def show_menu():
-    table = Table(title="📜 MENU FITUR BOT CRAFTWORLD", header_style="bold magenta")
-    table.add_column("No", style="cyan", width=5)
-    table.add_column("Fitur", style="green")
-    table.add_column("Deskripsi", style="white")
+        graphql_data = fetch_graphql_data(token)
+        if graphql_data:
+            config = extract_and_update_config(graphql_data, config, idx)
 
-    table.add_row("1", "CLAIM_AREA", "Mengklaim semua area di land plot")
-    table.add_row("2", "START_FACTORY", "Menyalakan semua factory yang tersedia")
-    table.add_row("3", "UPGRADE_FACTORY", "Meningkatkan level semua factory")
-    table.add_row("4", "CLAIM_MINE", "Mengambil resource dari semua mine")
-    table.add_row("5", "UPGRADE_MINE", "Meningkatkan level semua mine")
-    table.add_row("6", "START_MINE", "Menyalakan semua mine")
+        mine_ids = config.get(f"mineIds_{idx+1}", [])
+        factory_ids = config.get(f"factoryIds_{idx+1}", [])
+        area_ids = config.get(f"areaIds_{idx+1}", [])
 
-    console.print(table)
+        for area_id in area_ids:
+            handle_claim_area(token, area_id)
+
+        for factory_id in factory_ids:
+            start_factory(token, factory_id)
+
+        for mine_id in mine_ids:
+            claim_mine(token, mine_id)
+            upgrade_mine(token, mine_id)
+            start_mine(token, mine_id)
+
+        for factory_id in factory_ids:
+            upgrade_factory(token, factory_id)
+
+        delay = random.randint(60, 140)
+        Logger.step(f"✅ Akun ke-{idx+1} selesai. Menunggu {delay//60} menit...\n")
+        time.sleep(delay)
 
 def main():
+    config = read_config()
+    if not config:
+        Logger.error("Gagal baca config.json.")
+        return
+
+    account_count = len([k for k in config if k.startswith("apiKey_")])
+    if account_count == 0:
+        Logger.error("Tidak ada akun ditemukan.")
+        return
+
     Logger.watermark()
-    show_menu()
+    for idx in range(account_count):
+        api_key = config.get(f"apiKey_{idx+1}")
+        refresh_token = config.get(f"refresh_token_{idx+1}")
+        if not api_key or not refresh_token:
+            Logger.error(f"Akun ke-{idx+1} tidak lengkap.")
+            continue
+        threading.Thread(target=run_account_loop, args=(idx, api_key, refresh_token, config), daemon=True).start()
+
     while True:
-        Logger.step("🔄 Mulai sync & update config otomatis dari GraphQL...")
-
-        config = read_config()
-        if not config:
-            Logger.error("Config tidak ditemukan.")
-            return
-
-        account_count = len([k for k in config if k.startswith('apiKey_')])
-        if account_count == 0:
-            Logger.error("Tidak ada akun di config.")
-            return
-
-        for idx in range(account_count):
-            api_key = config.get(f"apiKey_{idx+1}")
-            refresh_token = config.get(f"refresh_token_{idx+1}")
-            if not api_key or not refresh_token:
-                Logger.error(f"API key/refresh_token untuk akun ke-{idx+1} tidak ditemukan.")
-                continue
-
-            token = get_account_token(idx, api_key, refresh_token)
-            if not token:
-                Logger.error(f"Gagal dapat token untuk akun ke-{idx+1}.")
-                continue
-
-            graphql_data = fetch_graphql_data(token)
-            if graphql_data:
-                config = extract_and_update_config(graphql_data, config, idx)
-
-            # --- Ambil semua id dari config hasil GraphQL sync ---
-            mine_ids = config.get(f"mineIds_{idx+1}", [])
-            factory_ids = config.get(f"factoryIds_{idx+1}", [])
-            area_ids = config.get(f"areaIds_{idx+1}", [])
-
-            # Claim semua area
-            dummy_account = {} # tidak penting di mode loop bulk
-            for area_id in area_ids:
-                handle_claim_area(token, area_id, dummy_account, idx)
-
-            # Start semua factory
-            for factory_id in factory_ids:
-                start_factory(token, factory_id)
-
-            # Upgrade semua mine
-            for mine_id in mine_ids:
-                claim_mine(token, mine_id)
-                upgrade_mine(token, mine_id)
-                start_mine(token, mine_id)
-
-            # Upgrade semua factory
-            for factory_id in factory_ids:
-                upgrade_factory(token, factory_id)
-
-        # Save config (update otomatis dari GraphQL)
-        # with open('config.json', 'w') as f:
-        #     json.dump(config, f, indent=4)
-        Logger.info("Config.json berhasil diupdate otomatis untuk semua akun.")
-        Logger.step("⏳ Menunggu 30 detik sebelum sync berikutnya...\n")
-        time.sleep(30)
+        time.sleep(999)
 
 if __name__ == "__main__":
     main()
